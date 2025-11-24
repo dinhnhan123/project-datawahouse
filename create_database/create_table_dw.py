@@ -1,16 +1,17 @@
+import json
 import mysql.connector
 
 # --- Cấu hình Railway mới ---
-config = {
-    'host': 'shinkansen.proxy.rlwy.net',
-    'port': 29701,
-    'user': 'root',
-    'password': 'IMRYCEqiQiiVCARSApGyHvNnYYKupjfX',
-    'database': 'railway'
-}
+# ------------------ Load config.json ------------------
+with open("config/config.json", "r", encoding="utf-8") as f:
+    cfg = json.load(f)
+
+# Lấy cấu hình DB staging
+dw_config = cfg["datawarehouse"]
+
 
 # --- Kết nối ---
-conn = mysql.connector.connect(**config)
+conn = mysql.connector.connect(**dw_config)
 cursor = conn.cursor()
 
 # --- Danh sách bảng ---
@@ -19,7 +20,7 @@ tables = ["PropertyListing", "PostingDate", "Location", "PropertyType"]  # Lưu 
 # --- Xóa bảng cũ ---
 for table in tables:
     cursor.execute(f"DROP TABLE IF EXISTS {table};")
-    print(f"✅ Dropped table {table} if existed.")
+    print(f"Dropped table {table} if existed.")
 
 # --- Danh sách lệnh tạo bảng ---
 create_queries = [
@@ -84,7 +85,7 @@ for query in create_queries:
     cursor.execute(query)
 
 conn.commit()
-print("✅ All tables created successfully with startDay/endDay/isCurrent in PropertyListing!")
+print("All tables created successfully with startDay/endDay/isCurrent in PropertyListing!")
 
 cursor.close()
 conn.close()

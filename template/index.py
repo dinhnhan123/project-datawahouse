@@ -161,8 +161,11 @@ if menu == "ETL Pipeline":
         if st.button("2. Crawl Data", use_container_width=True):
             run_etl_script("craw_data/stagging.py", "Crawl Data")
 
-        if st.button("3. Load vào Staging DB", use_container_width=True):
+        if st.button("3. Load dữ liệu thô vào Staging DB", use_container_width=True):
             run_etl_script("loadData/load_data_stagging.py", "Load to Staging")
+
+        if st.button("4. Transform & Load to Staging DB", use_container_width=True):
+            run_etl_script("transform/transform_staging.py", "Transform & Load to Staging DB")
 
     with col2:
         st.markdown("#### 2. Giai đoạn Data Warehouse")

@@ -1,10 +1,9 @@
+import json
 import pandas as pd
 import mysql.connector
 from datetime import datetime
 import os
-import json
 
-# ===== Kết nối MySQL =====
 # ===== Load cấu hình từ config.json vào load_data_script=====
 
 with open("config/config.json", "r", encoding="utf-8") as f:
@@ -22,16 +21,14 @@ file_path = os.path.join("data", file_name)
 if not os.path.exists(file_path):
     raise FileNotFoundError(f"File {file_path} không tồn tại!")
 
+print(f"Đang đọc file: {file_path}")
 # ===== Load Excel =====
 df = pd.read_excel(file_path, engine='openpyxl')
 df.columns = df.columns.str.strip()
 
 # ===== Detect cột Phòng ngủ và Diện tích =====
-bedroom_col = [c for c in df.columns if 'PN' in c or 'Phòng ngủ' in c]
-area_col = [c for c in df.columns if 'DT' in c or 'Diện tích' in c]
-
-bedroom_col = bedroom_col[0] if bedroom_col else 'PN'
-area_col = area_col[0] if area_col else 'DT'
+bedroom_col = next((c for c in df.columns if "PN" in c or "Phòng ngủ" in c), "PN")
+area_col = next((c for c in df.columns if "DT" in c or "Diện tích" in c), "DT")
 
 # ===== Chuyển định dạng ngày =====
 def parse_date(val):
@@ -47,32 +44,15 @@ def parse_date(val):
 if 'Ngày đăng' in df.columns:
     df['Ngày đăng'] = df['Ngày đăng'].apply(parse_date)
 
-# ===== Parse Phòng ngủ =====
-def parse_bedrooms(val):
-    try:
-        if pd.isna(val) or str(val).strip() == '':
-            return 1
-        return int(float(val))
-    except:
-        return 1
 
-# ===== Parse Diện tích =====
-def parse_area(val):
-    try:
-        if pd.isna(val) or str(val).strip() == '':
-            return 'N/A'
-        return str(val)
-    except:
-        return 'N/A'
 
 # ===== Xóa dữ liệu cũ =====
-cursor.execute("DELETE FROM Property")
-conn.commit()
-print("Đã xóa dữ liệu cũ trong bảng Property")
+cursor.execute("TRUNCATE TABLE Property_Temp")
+print("Đã làm sạch bảng Property_Temp.")
 
 # ===== INSERT dữ liệu mới =====
 insert_query = """
-INSERT INTO Property 
+INSERT INTO Property_Temp 
 (`key`, url, create_date, name, price, area, old_address, street, ward, district, city, bedrooms, floors, street_width, description, posting_date, property_type)
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
@@ -92,13 +72,13 @@ for idx, row in df.iterrows():
         parse_date(row.get('Ngày cào')),
         clean_text(row.get('Tên')),
         clean_text(row.get('Giá')),
-        clean_text(parse_area(row[area_col])),
+        clean_text(row.get(area_col)),
         clean_text(row.get('Địa chỉ')),
         clean_text(row.get('Đường')) if 'Đường' in df.columns else 'N/A',
         clean_text(row.get('Phường')),
         clean_text(row.get('Quận')),
         clean_text(row.get('Thành phố', 'Hồ Chí Minh')),
-        parse_bedrooms(row[bedroom_col]),
+        clean_text(row.get(bedroom_col)),
         clean_text(row.get('Tầng')),
         clean_text(row.get('Lộ giới')),
         clean_text(row.get('Mô tả')),
@@ -119,4 +99,5 @@ print("Đã cập nhật giá bản ghi có key = '17672496' thành 7,9 tỷ/m²
 conn.commit()
 cursor.close()
 conn.close()
-print(f"Đã load toàn bộ file {file_name} vào MySQL (overwrite toàn bộ)")
+print(f"Đã load {len(df)} dòng vào bảng 'Property_Temp'.")
+#print(f"Đã load toàn bộ file {file_name} vào MySQL (overwrite toàn bộ)")

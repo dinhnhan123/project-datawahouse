@@ -1,44 +1,17 @@
 # load_data_datawarehouse.py
 
+import json
 import mysql.connector
 from datetime import datetime
 import re
-import json
+# script transforms and loads data from staging DB to data warehouse with SCD2
 
-# ------------------ Parse price ------------------
-def parse_price(price_str):
-    if not price_str:
-        return 0.0
-    price_str = price_str.lower().replace(',', '.').strip()
-    try:
-        if 'triệu' in price_str:
-            number = float(re.findall(r'\d+\.?\d*', price_str)[0])
-            return number * 1_000_000
-        elif 'tỷ' in price_str:
-            number = float(re.findall(r'\d+\.?\d*', price_str)[0])
-            return number * 1_000_000_000
-        else:
-            cleaned = ''.join(c for c in price_str if c.isdigit() or c == '.')
-            return float(cleaned)
-    except:
-        return 0.0
+# ------------------ Load config.json ------------------
+with open("config/config.json", "r", encoding="utf-8") as f:
+    cfg = json.load(f)
 
-# ------------------ Parse area ------------------
-def parse_area(area_str):
-    if not area_str:
-        return 0.0
-    area_str = area_str.lower().replace(',', '.').strip()
-    try:
-        return float(re.findall(r'\d+\.?\d*', area_str)[0])
-    except:
-        return 0.0
-
-# ------------------ Parse int ------------------
-def parse_int_from_str(value_str):
-    if not value_str:
-        return 0
-    match = re.search(r'\d+', value_str)
-    return int(match.group()) if match else 0
+staging_config = cfg["staging"]
+dw_config = cfg["datawarehouse"]
 
 # ------------------ Compare old vs new for SCD2 ------------------
 def has_changes(old, new):
@@ -51,15 +24,6 @@ def has_changes(old, new):
         if old[f] != new[f]:
             return True
     return False
-
-
-# ------------------ DB CONFIG ------------------
-# ------------------ Load config.json vào load_data_datawarehouse ------------------
-with open("config/config.json", "r", encoding="utf-8") as f:
-    cfg = json.load(f)
-
-staging_config = cfg["staging"]
-dw_config = cfg["datawarehouse"]
 
 # ------------------ LOAD FROM STAGING ------------------
 staging_conn = mysql.connector.connect(**staging_config)
@@ -82,10 +46,10 @@ for row in staging_data:
     url = row['url']
     create_date = row['create_date'] or datetime.today().date()
     name = row['name']
-    price = parse_price(row['price'])
-    area = parse_area(row['area'])
-    bedrooms = parse_int_from_str(row['bedrooms'])
-    floors = parse_int_from_str(row['floors'])
+    price = row['price']
+    area = row['area']
+    bedrooms = row['bedrooms']
+    floors = row['floors']
     description = row['description']
     street_width = row['street_width']
 
