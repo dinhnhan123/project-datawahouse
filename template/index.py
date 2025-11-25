@@ -1,5 +1,6 @@
 from datetime import date
 import glob
+from dotenv import load_dotenv #pip install python-dotenv
 import streamlit as st
 import subprocess
 import pandas as pd
@@ -7,6 +8,8 @@ import mysql.connector
 import altair as alt
 import json
 import os
+
+from notification import send_error_email # Hàm gửi email cảnh báo lỗi
 
 # ======================= 1. CONFIGURATION =======================
 st.set_page_config(
@@ -41,6 +44,10 @@ def query_dw(sql, params=None):
     except Exception:
         return pd.DataFrame()
 
+#Chạy gửi mail báo lỗi tại local
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
+
 # Helper function để chạy script Python và hiện log
 def run_etl_script(script_path, description):
     with st.spinner(f"Đang chạy: {description}..."):
@@ -70,10 +77,16 @@ def run_etl_script(script_path, description):
                     st.code(out.stdout)
             else:
                 st.error(f"{description} thất bại!")
+
+                # Gửi mail tự động
+                send_error_email(script_path, out.stderr) 
+                st.toast("Đã gửi email cảnh báo lỗi cho Admin!")
+
                 with st.expander("Xem lỗi (Error Log)"):
                     st.code(out.stderr)
         except Exception as e:
             st.error(f"Lỗi hệ thống: {e}")
+            send_error_email(script_path, str(e)) #gửi mail
 
 # Hàm kiểm tra file đã Crawl chưa (Check File System)
 def check_crawled_file_exists(today_date):

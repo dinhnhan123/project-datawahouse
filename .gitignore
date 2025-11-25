@@ -1,0 +1,9 @@
+# Chặn file chứa mật khẩu
+.env
+
+# Chặn file rác của Python 
+__pycache__/
+*.pyc
+
+# Chặn file hệ thống
+.DS_Store

@@ -12,5 +12,12 @@
         "user": "root",
         "password": "IMRYCEqiQiiVCARSApGyHvNnYYKupjfX",
         "database": "railway"
+    },
+    "control": {
+        "host": "centerbeam.proxy.rlwy.net",
+        "port": 33030,
+        "user": "root",
+        "password":"AZuJafaeaTynjioMdSyqYpBoBZQbdwSA",
+        "database":"railway"
     }
 }
