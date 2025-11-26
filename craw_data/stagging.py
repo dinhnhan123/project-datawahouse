@@ -3,8 +3,19 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 from datetime import datetime
-import os
+import sys, os
 import re
+import mysql.connector
+import json
+from dotenv import load_dotenv
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(ROOT_DIR)
+from template.notification import send_error_email
+
+# Chạy gửi mail báo lỗi tại local
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
 
 # ------------------ HÀM LOẠI BỎ ICON / EMOJI ------------------
 def clean_text(text):
@@ -146,25 +157,103 @@ def crawl_all(pages=5, delay=1.0):
     return all_props
 
 # ------------------ MAIN ------------------
-props = crawl_all(pages=10, delay=1.5)
-df = pd.DataFrame(props)
+try:
+    # Load config
+    with open("config/config.json", "r", encoding="utf-8") as f:
+        cfg = json.load(f)
 
-# ===== TÊN FILE THEO NGÀY =====
-today_str = datetime.now().strftime('%d_%m_%Y')
-file_name = f"bds_{today_str}.xlsx"
-file_path = os.path.join("data", file_name)
+    control_config = cfg["control"]
 
-# ===== GỘP DỮ LIỆU CŨ + MỚI VÀ LỌC TRÙNG THEO KEY =====
-if os.path.exists(file_path):
-    old_df = pd.read_excel(file_path)
-    merged_df = pd.concat([old_df, df], ignore_index=True)
-    final_df = merged_df.drop_duplicates(subset="Key", keep="last")
-else:
-    final_df = df
+    conn = mysql.connector.connect(**control_config)
+    cursor = conn.cursor()
 
-# ===== LƯU FILE =====
-if not os.path.exists("data"):
-    os.makedirs("data")
+    # ========== 1) GHI LOG BẮT ĐẦU PROCESS (PS) ==========
+    cursor.execute("""
+        INSERT INTO process_log (process_name, status, file_id, started_at, updated_at)
+        VALUES ('Crawl Data', 'PS', NULL, NOW(), NOW())
+    """)
+    process_id = cursor.lastrowid
+    conn.commit()
 
-final_df.to_excel(file_path, index=False, engine="xlsxwriter")
-print(f"Staging đã lưu snapshot mới: {file_path}")
+    # ========== 2) CRAWL DỮ LIỆU ==========
+    props = crawl_all(pages=10, delay=1.5)
+    df = pd.DataFrame(props)
+
+    # ===== TÊN FILE THEO NGÀY =====
+    today_str = datetime.now().strftime('%d_%m_%Y')
+    file_name = f"bds_{today_str}.xlsx"
+    file_path = os.path.join("data", file_name)
+
+    # ===== GỘP DỮ LIỆU CŨ + MỚI VÀ LỌC TRÙNG THEO KEY =====
+    if os.path.exists(file_path):
+        old_df = pd.read_excel(file_path)
+        merged_df = pd.concat([old_df, df], ignore_index=True)
+        final_df = merged_df.drop_duplicates(subset="Key", keep="last")
+    else:
+        final_df = df
+
+    # ===== LƯU FILE =====
+    if not os.path.exists("data"):
+        os.makedirs("data")
+
+    final_df.to_excel(file_path, index=False, engine="xlsxwriter")
+    print(f"Staging đã lưu snapshot mới: {file_path}")
+
+    # ------------------ GHI LOG VÀO BẢNG file_log ------------------
+    normalized_path = file_path.replace("\\", "/") 
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    row_count = len(final_df)
+        
+    # Kiểm tra xem file này hôm nay đã ghi log chưa?
+    check_sql = "SELECT file_id FROM file_log WHERE file_path = %s"
+    cursor.execute(check_sql, (normalized_path,))
+
+    # ===== FIX LỖI: đọc hết result trước khi chạy UPDATE =====
+    rows = cursor.fetchall()
+    existing_log = rows[0] if rows else None
+
+    if existing_log:
+        file_id = existing_log[0]
+        update_sql = """
+            UPDATE file_log 
+            SET row_count = %s, status = 'ER', updated_at = NOW(), author = 'System'
+            WHERE file_id = %s
+        """
+        cursor.execute(update_sql, (row_count, file_id))
+        print(f"Đã cập nhật file_log (ID: {file_id}) thành trạng thái ER.")
+        
+    else:
+        insert_sql = """
+            INSERT INTO file_log (file_path, data_date, row_count, status, author, created_at, updated_at)
+            VALUES (%s, %s, %s, 'ER', 'System', NOW(), NOW())
+        """
+        cursor.execute(insert_sql, (normalized_path, current_date, row_count))
+        file_id = cursor.lastrowid
+        print(f"Đã tạo mới log trong file_log với trạng thái ER.")
+
+    conn.commit()
+
+    # ========== 4) UPDATE PROCESS_LOG → SC ==========
+    cursor.execute("""
+        UPDATE process_log
+        SET status='SC', file_id=%s, updated_at=NOW()
+        WHERE process_id=%s
+    """, (file_id, process_id))
+    conn.commit()
+
+    cursor.close()
+    conn.close()
+
+except Exception as e:
+    try:
+        cursor.execute("""
+            UPDATE process_log
+            SET status='FL', error_message=%s, updated_at=NOW()
+            WHERE process_id=%s
+        """, (str(e), process_id))
+        conn.commit()
+    except:
+        pass
+
+    send_error_email("CRAWL ERROR", str(e))
+    raise

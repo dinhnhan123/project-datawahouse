@@ -1,12 +1,82 @@
 import mysql.connector
 import json
 import re
+import os,sys
+from dotenv import load_dotenv
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(ROOT_DIR)
+from template.notification import send_error_email
+
+#Chạy gửi mail báo lỗi tại local
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
 
 # ------------------ Load config.json ------------------
 with open("config/config.json", "r", encoding="utf-8") as f:
     cfg = json.load(f)
 
 staging_config = cfg["staging"]
+control_config = cfg["control"]
+
+#Hàm ghi log vào bảng process_log và file_log
+def start_process_log(process_name, file_id):
+    """Insert log bắt đầu (PS)"""
+    conn = mysql.connector.connect(**control_config)
+    cursor = conn.cursor()
+    sql = """
+        INSERT INTO process_log (file_id, process_name, status, started_at)
+        VALUES (%s, %s, 'PS', NOW())
+    """
+    cursor.execute(sql, (file_id, process_name))
+    conn.commit()
+    process_id = cursor.lastrowid
+    cursor.close()
+    conn.close()
+    return process_id
+
+
+def success_process_log(process_id):
+    """Cập nhật SC"""
+    conn = mysql.connector.connect(**control_config)
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE process_log 
+        SET status='SC', updated_at=NOW()
+        WHERE process_id=%s
+    """, (process_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def failed_process_log(process_id, error_msg):
+    """Cập nhật FL"""
+    conn = mysql.connector.connect(**control_config)
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE process_log 
+        SET status='FL', updated_at=NOW()
+        WHERE process_id=%s
+    """, (process_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def update_file_log_status(file_id, status):
+    conn = mysql.connector.connect(**control_config)
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE file_log
+        SET status=%s, updated_at=NOW()
+        WHERE file_id=%s
+    """, (status, file_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
 
 # ------------------ Hàm chuẩn hóa ------------------
 def parse_price(price_str):
@@ -16,7 +86,7 @@ def parse_price(price_str):
     try:
         if "triệu" in price_str:
             number = float(re.findall(r"\d+\.?\d*", price_str)[0])
-            return ngit merge --abortumber * 1_000_000
+            return number * 1_000_000
         elif "tỷ" in price_str:
             number = float(re.findall(r"\d+\.?\d*", price_str)[0])
             return number * 1_000_000_000
@@ -43,53 +113,96 @@ def parse_int_from_str(value_str):
 
 
 # ------------------ RUN TRANSFORM ------------------
-conn = mysql.connector.connect(**staging_config)
-cursor = conn.cursor(dictionary=True)
+# 
+def get_transform_file():
+    conn = mysql.connector.connect(**control_config)
+    cursor = conn.cursor(dictionary=True)
 
-# Lấy dữ liệu gốc từ Property_Temp
-cursor.execute("SELECT * FROM Property_Temp;")
-temp_rows = cursor.fetchall()
+    cursor.execute("""
+        SELECT * FROM file_log 
+        WHERE status IN ('ST', 'TF')
+        ORDER BY file_id ASC
+        LIMIT 1;
+    """)
 
-print(f"Fetched {len(temp_rows)} rows from Property_Temp")
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row
 
-# Xóa bảng Property trước khi ghi dữ liệu mới
-cursor.execute("DELETE FROM Property;")
 
-# Chuẩn bị insert
-insert_sql = """
-INSERT INTO Property (
-    `key`, url, create_date, name, price, area, bedrooms, floors,
-    description, street_width, property_type, street, ward, district,
-    city, old_address, posting_date
-) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-"""
+file_info = get_transform_file()
 
-count = 0
+if not file_info:
+    print("Không có file nào cần transform (ST/TF).")
+    exit()
 
-for row in temp_rows:
-    cursor.execute(insert_sql, (
-        row["key"],
-        row["url"],
-        row["create_date"],
-        row["name"],
-        parse_price(row["price"]),
-        parse_area(row["area"]),
-        parse_int_from_str(row["bedrooms"]),
-        parse_int_from_str(row["floors"]),
-        row["description"],
-        row["street_width"],
-        row["property_type"],
-        row["street"],
-        row["ward"],
-        row["district"],
-        row["city"],
-        row["old_address"],
-        row["posting_date"]
-    ))
-    count += 1
+file_id = file_info["file_id"]
+print(f"Transforming file_id = {file_id}")
 
-conn.commit()
-cursor.close()
-conn.close()
+# Ghi log bắt đầu
+process_id = start_process_log("Transform Data", file_id)
 
-print(f"Transform completed → {count} rows inserted into Property")
+try:
+    # Thực hiện transform
+    conn = mysql.connector.connect(**staging_config)
+    cursor = conn.cursor(dictionary=True)
+
+    # Lấy dữ liệu gốc từ Property_Temp
+    cursor.execute("SELECT * FROM Property_Temp;")
+    temp_rows = cursor.fetchall()
+
+    print(f"Fetched {len(temp_rows)} rows from Property_Temp")
+
+    # Xóa bảng Property trước khi ghi dữ liệu mới
+    cursor.execute("DELETE FROM Property;")
+
+    # Chuẩn bị insert
+    insert_sql = """
+    INSERT IGNORE INTO Property (
+        `key`, url, create_date, name, price, area, bedrooms, floors,
+        description, street_width, property_type, street, ward, district,
+        city, old_address, posting_date
+    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """
+
+    count = 0
+
+    for row in temp_rows:
+        cursor.execute(insert_sql, (
+            row["key"],
+            row["url"],
+            row["create_date"],
+            row["name"],
+            parse_price(row["price"]),
+            parse_area(row["area"]),
+            parse_int_from_str(row["bedrooms"]),
+            parse_int_from_str(row["floors"]),
+            row["description"],
+            row["street_width"],
+            row["property_type"],
+            row["street"],
+            row["ward"],
+            row["district"],
+            row["city"],
+            row["old_address"],
+            row["posting_date"]
+        ))
+        count += 1
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    print(f"Transform completed → {count} rows inserted into Property")
+
+# ====== LOG SUCCESS ======
+    update_file_log_status(file_id, "TR")
+    success_process_log(process_id)
+
+except Exception as e:
+    print("Transform Failed:", e)
+
+    # ====== LOG FAILED ======
+    update_file_log_status(file_id, "TF")
+    failed_process_log(process_id, str(e))    
